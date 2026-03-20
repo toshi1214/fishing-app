@@ -17,6 +17,7 @@ export default function HomePage() {
         <p className="page-description">
           現在地を取得して、釣り場所をこのブラウザ内に保存します。
           スマホでも使いやすいように、まずは IndexedDB を使った最小版にしています。
+          場所の詳細画面では、釣果や条件の記録も追加できます。
         </p>
         <div className="hero-points">
           <p className="hero-point">今の保存先は、この端末のブラウザ内です。</p>

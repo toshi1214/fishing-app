@@ -1,12 +1,22 @@
-import type { FishingSpot } from "@/lib/types";
+import type { FishingLog, Spot } from "@/lib/types";
 
 const DB_NAME = "fishing-app-db";
-const STORE_NAME = "fishing-spots";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
+const SPOT_STORE_NAME = "spots";
+const LOG_STORE_NAME = "logs";
+const LEGACY_SPOT_STORE_NAME = "fishing-spots";
+
+type LegacyFishingSpot = {
+  id: string;
+  title: string;
+  memo: string;
+  lat: number;
+  lng: number;
+  date: string;
+};
 
 /**
  * IndexedDB のリクエストを Promise で扱いやすくするための関数です。
- * 成功したら result を返し、失敗したら reject します。
  */
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -16,7 +26,7 @@ function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
 }
 
 /**
- * 書き込みトランザクションが完了するまで待つための関数です。
+ * トランザクション完了まで待つための関数です。
  */
 function transactionToPromise(transaction: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -27,10 +37,26 @@ function transactionToPromise(transaction: IDBTransaction): Promise<void> {
 }
 
 /**
- * ブラウザの IndexedDB を開きます。
- * 初回は object store を作成します。
+ * 古い FishingSpot 形式のデータを、新しい Spot 形式へ変換します。
+ * areaName は以前の構成では無かったので、空文字で初期化します。
  */
-export function openSpotDatabase(): Promise<IDBDatabase> {
+function convertLegacySpot(legacySpot: LegacyFishingSpot): Spot {
+  return {
+    id: legacySpot.id,
+    name: legacySpot.title,
+    lat: legacySpot.lat,
+    lng: legacySpot.lng,
+    areaName: "",
+    memo: legacySpot.memo,
+    createdAt: legacySpot.date,
+  };
+}
+
+/**
+ * ブラウザの IndexedDB を開きます。
+ * 初回やバージョン更新時に object store を作成します。
+ */
+export function openFishingDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof window === "undefined" || !("indexedDB" in window)) {
       reject(new Error("このブラウザでは IndexedDB が利用できません。"));
@@ -41,9 +67,37 @@ export function openSpotDatabase(): Promise<IDBDatabase> {
 
     request.onupgradeneeded = () => {
       const database = request.result;
+      const transaction = request.transaction;
 
-      if (!database.objectStoreNames.contains(STORE_NAME)) {
-        database.createObjectStore(STORE_NAME, { keyPath: "id" });
+      if (!database.objectStoreNames.contains(SPOT_STORE_NAME)) {
+        database.createObjectStore(SPOT_STORE_NAME, { keyPath: "id" });
+      }
+
+      if (!database.objectStoreNames.contains(LOG_STORE_NAME)) {
+        const logStore = database.createObjectStore(LOG_STORE_NAME, {
+          keyPath: "id",
+        });
+
+        logStore.createIndex("spotId", "spotId", { unique: false });
+      }
+
+      // 旧構成の fishing-spots から、新しい spots へデータを移します。
+      // 以前の記録をできるだけ失わないための移行処理です。
+      if (
+        transaction &&
+        database.objectStoreNames.contains(LEGACY_SPOT_STORE_NAME)
+      ) {
+        const legacyStore = transaction.objectStore(LEGACY_SPOT_STORE_NAME);
+        const newSpotStore = transaction.objectStore(SPOT_STORE_NAME);
+        const legacyRequest = legacyStore.getAll();
+
+        legacyRequest.onsuccess = () => {
+          const legacySpots = legacyRequest.result as LegacyFishingSpot[];
+
+          legacySpots.forEach((legacySpot) => {
+            newSpotStore.put(convertLegacySpot(legacySpot));
+          });
+        };
       }
     };
 
@@ -55,7 +109,7 @@ export function openSpotDatabase(): Promise<IDBDatabase> {
 /**
  * ブラウザごとの差異に備えて、ID を安全に作るための関数です。
  */
-function createSpotId(): string {
+function createId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
   }
@@ -64,25 +118,23 @@ function createSpotId(): string {
 }
 
 /**
- * 1件保存します。
- * 保存後は、実際に保存したデータを返します。
+ * Spot を1件保存します。
  */
-export async function saveSpot(
-  input: Omit<FishingSpot, "id">
-): Promise<FishingSpot> {
-  const database = await openSpotDatabase();
+export async function saveSpot(input: Omit<Spot, "id">): Promise<Spot> {
+  const database = await openFishingDatabase();
 
   try {
-    const transaction = database.transaction(STORE_NAME, "readwrite");
-    const store = transaction.objectStore(STORE_NAME);
+    const transaction = database.transaction(SPOT_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(SPOT_STORE_NAME);
 
-    const newSpot: FishingSpot = {
-      id: createSpotId(),
-      title: input.title,
-      memo: input.memo,
+    const newSpot: Spot = {
+      id: createId(),
+      name: input.name,
       lat: input.lat,
       lng: input.lng,
-      date: input.date,
+      areaName: input.areaName,
+      memo: input.memo,
+      createdAt: input.createdAt,
     };
 
     store.put(newSpot);
@@ -95,21 +147,20 @@ export async function saveSpot(
 }
 
 /**
- * 一覧を取得します。
- * 新しい記録が上に来るように日付の降順で並べます。
+ * Spot 一覧を取得します。
  */
-export async function getAllSpots(): Promise<FishingSpot[]> {
-  const database = await openSpotDatabase();
+export async function getAllSpots(): Promise<Spot[]> {
+  const database = await openFishingDatabase();
 
   try {
-    const transaction = database.transaction(STORE_NAME, "readonly");
-    const store = transaction.objectStore(STORE_NAME);
+    const transaction = database.transaction(SPOT_STORE_NAME, "readonly");
+    const store = transaction.objectStore(SPOT_STORE_NAME);
     const request = store.getAll();
-
-    const spots = await requestToPromise<FishingSpot[]>(request);
+    const spots = await requestToPromise<Spot[]>(request);
 
     return spots.sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
   } finally {
     database.close();
@@ -117,20 +168,105 @@ export async function getAllSpots(): Promise<FishingSpot[]> {
 }
 
 /**
- * id を使って 1件だけ取得します。
+ * Spot を1件取得します。
  */
-export async function getSpotById(
-  id: string
-): Promise<FishingSpot | undefined> {
-  const database = await openSpotDatabase();
+export async function getSpotById(id: string): Promise<Spot | undefined> {
+  const database = await openFishingDatabase();
 
   try {
-    const transaction = database.transaction(STORE_NAME, "readonly");
-    const store = transaction.objectStore(STORE_NAME);
+    const transaction = database.transaction(SPOT_STORE_NAME, "readonly");
+    const store = transaction.objectStore(SPOT_STORE_NAME);
     const request = store.get(id);
 
-    const spot = await requestToPromise<FishingSpot | undefined>(request);
-    return spot;
+    return await requestToPromise<Spot | undefined>(request);
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * FishingLog を1件保存します。
+ */
+export async function saveFishingLog(
+  input: Omit<FishingLog, "id">
+): Promise<FishingLog> {
+  const database = await openFishingDatabase();
+
+  try {
+    const transaction = database.transaction(LOG_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(LOG_STORE_NAME);
+
+    const newLog: FishingLog = {
+      id: createId(),
+      spotId: input.spotId,
+      date: input.date,
+      result: input.result,
+      fishType: input.fishType,
+      sizeCm: input.sizeCm,
+      count: input.count,
+      weather: input.weather,
+      tide: input.tide,
+      timeZone: input.timeZone,
+      lureOrBait: input.lureOrBait,
+      memo: input.memo,
+      createdAt: input.createdAt,
+    };
+
+    store.put(newLog);
+    await transactionToPromise(transaction);
+
+    return newLog;
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * 指定した Spot に紐づく FishingLog 一覧を取得します。
+ * 新しい釣行が上に来るように並べます。
+ */
+export async function getFishingLogsBySpotId(
+  spotId: string
+): Promise<FishingLog[]> {
+  const database = await openFishingDatabase();
+
+  try {
+    const transaction = database.transaction(LOG_STORE_NAME, "readonly");
+    const store = transaction.objectStore(LOG_STORE_NAME);
+    const index = store.index("spotId");
+    const request = index.getAll(spotId);
+    const logs = await requestToPromise<FishingLog[]>(request);
+
+    return logs.sort((a, b) => {
+      const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+
+      if (dateDiff !== 0) {
+        return dateDiff;
+      }
+
+      return (
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+    });
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * FishingLog を1件取得します。
+ */
+export async function getFishingLogById(
+  id: string
+): Promise<FishingLog | undefined> {
+  const database = await openFishingDatabase();
+
+  try {
+    const transaction = database.transaction(LOG_STORE_NAME, "readonly");
+    const store = transaction.objectStore(LOG_STORE_NAME);
+    const request = store.get(id);
+
+    return await requestToPromise<FishingLog | undefined>(request);
   } finally {
     database.close();
   }

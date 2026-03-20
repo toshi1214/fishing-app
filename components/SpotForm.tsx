@@ -145,11 +145,12 @@ export default function SpotForm({ onSaved }: SpotFormProps) {
 
     try {
       await saveSpot({
-        title: title.trim(),
+        name: title.trim(),
         memo: memo.trim(),
         lat,
         lng,
-        date: new Date().toISOString(),
+        areaName: autoPlaceName ?? "",
+        createdAt: new Date().toISOString(),
       });
 
       // 保存成功後は入力欄を初期化します。

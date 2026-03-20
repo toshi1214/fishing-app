@@ -5,14 +5,14 @@ import { useEffect, useState } from "react";
 
 import { formatDate, formatLatLng } from "@/lib/format";
 import { getAllSpots } from "@/lib/spotStorage";
-import type { FishingSpot } from "@/lib/types";
+import type { Spot } from "@/lib/types";
 
 type SpotListProps = {
   refreshKey: number;
 };
 
 export default function SpotList({ refreshKey }: SpotListProps) {
-  const [spots, setSpots] = useState<FishingSpot[]>([]);
+  const [spots, setSpots] = useState<Spot[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -66,8 +66,11 @@ export default function SpotList({ refreshKey }: SpotListProps) {
         <div className="list">
           {spots.map((spot) => (
             <article key={spot.id} className="list-item">
-              <h3 className="list-title">{spot.title}</h3>
-              <p className="list-date">{formatDate(spot.date)}</p>
+              <h3 className="list-title">{spot.name}</h3>
+              <p className="list-date">{formatDate(spot.createdAt)}</p>
+              <p className="list-memo">
+                地名: {spot.areaName !== "" ? spot.areaName : "未取得"}
+              </p>
               <p className="list-memo">{spot.memo || "メモなし"}</p>
               <p className="list-coords">{formatLatLng(spot.lat, spot.lng)}</p>
               <Link href={`/spots/${spot.id}`} className="text-link">

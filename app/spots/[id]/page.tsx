@@ -4,13 +4,17 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import FishingLogForm from "@/components/FishingLogForm";
+import FishingLogList from "@/components/FishingLogList";
 import { formatDate, formatLatLng } from "@/lib/format";
-import { getSpotById } from "@/lib/spotStorage";
-import type { FishingSpot } from "@/lib/types";
+import { getFishingLogsBySpotId, getSpotById } from "@/lib/spotStorage";
+import type { FishingLog, Spot } from "@/lib/types";
 
 export default function SpotDetailPage() {
   const params = useParams<{ id: string }>();
-  const [spot, setSpot] = useState<FishingSpot | null>(null);
+  const [spot, setSpot] = useState<Spot | null>(null);
+  const [logs, setLogs] = useState<FishingLog[]>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -23,20 +27,25 @@ export default function SpotDetailPage() {
       return;
     }
 
-    const loadSpot = async () => {
+    const loadData = async () => {
       setIsLoading(true);
       setErrorMessage("");
 
       try {
-        const savedSpot = await getSpotById(spotId);
+        const [savedSpot, savedLogs] = await Promise.all([
+          getSpotById(spotId),
+          getFishingLogsBySpotId(spotId),
+        ]);
 
         if (!savedSpot) {
-          setErrorMessage("指定された記録が見つかりません。");
+          setErrorMessage("指定された場所が見つかりません。");
           setSpot(null);
+          setLogs([]);
           return;
         }
 
         setSpot(savedSpot);
+        setLogs(savedLogs);
       } catch (error) {
         console.error("Load detail error:", error);
 
@@ -50,15 +59,15 @@ export default function SpotDetailPage() {
       }
     };
 
-    void loadSpot();
-  }, [params.id]);
+    void loadData();
+  }, [params.id, refreshKey]);
 
   return (
     <main className="container">
       <section className="card">
-        <h1 className="section-title">記録の詳細</h1>
+        <h1 className="section-title">場所の詳細</h1>
         <p className="section-description">
-          この画面も IndexedDB から読み込んでいます。
+          場所の情報と、その場所に紐づく釣行記録をまとめて確認できます。
         </p>
 
         {isLoading && <p className="message">読み込み中...</p>}
@@ -74,24 +83,38 @@ export default function SpotDetailPage() {
 
         {!isLoading && errorMessage === "" && spot !== null && (
           <>
-            <p className="detail-label">保存日時</p>
-            <p className="detail-value">{formatDate(spot.date)}</p>
-
             <p className="detail-label">場所名</p>
-            <p className="detail-value">{spot.title}</p>
+            <p className="detail-value">{spot.name}</p>
+
+            <p className="detail-label">地名</p>
+            <p className="detail-value">
+              {spot.areaName !== "" ? spot.areaName : "未取得"}
+            </p>
+
+            <p className="detail-label">保存日時</p>
+            <p className="detail-value">{formatDate(spot.createdAt)}</p>
 
             <p className="detail-label">メモ</p>
             <p className="detail-value">{spot.memo || "メモなし"}</p>
 
             <p className="detail-label">緯度経度</p>
             <p className="detail-value">{formatLatLng(spot.lat, spot.lng)}</p>
-
-            <Link href="/" className="button-link">
-              一覧へ戻る
-            </Link>
           </>
         )}
       </section>
+
+      {!isLoading && errorMessage === "" && spot !== null && (
+        <>
+          <FishingLogForm
+            spotId={spot.id}
+            onSaved={() => setRefreshKey((prev) => prev + 1)}
+          />
+          <FishingLogList logs={logs} />
+          <Link href="/" className="button-link">
+            一覧へ戻る
+          </Link>
+        </>
+      )}
     </main>
   );
 }
